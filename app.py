@@ -1,93 +1,72 @@
 import os
 import requests
 import google.generativeai as genai
-from flask import Flask, request, jsonify
+from flask import Flask, request
 from dotenv import load_dotenv
 
 load_dotenv()
 
 app = Flask(__name__)
 
-# Cấu hình Token
+# Lấy các biến môi trường
 PAGE_ACCESS_TOKEN = os.getenv("PAGE_ACCESS_TOKEN")
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# Cấu hình Gemini
+# Cấu hình Gemini AI
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel('gemini-1.5-flash')
 
-# ===== HOME ROUTE =====
 @app.route("/", methods=["GET"])
 def home():
-    return "Messenger Bot (Gemini AI) is running!", 200
+    return "Bot Gemini đang hoạt động!", 200
 
-# ===== VERIFY WEBHOOK =====
 @app.route("/webhook", methods=["GET"])
 def verify():
+    # Xác thực với Facebook Webhook
     mode = request.args.get("hub.mode")
     token = request.args.get("hub.verify_token")
     challenge = request.args.get("hub.challenge")
-
     if mode == "subscribe" and token == VERIFY_TOKEN:
-        print("WEBHOOK VERIFIED")
         return challenge, 200
-    return "Verification failed", 403
+    return "Xác thực thất bại", 403
 
-# ===== RECEIVE MESSAGE =====
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    try:
-        data = request.get_json()
-        if data.get("object") == "page":
-            for entry in data.get("entry", []):
-                for messaging in entry.get("messaging", []):
-                    sender_id = messaging["sender"]["id"]
+    data = request.get_json()
+    if data.get("object") == "page":
+        for entry in data.get("entry", []):
+            for messaging in entry.get("messaging", []):
+                sender_id = messaging["sender"]["id"]
+                if "message" in messaging and "text" in messaging["message"]:
+                    user_text = messaging["message"]["text"]
                     
-                    # Tránh trả lời tin nhắn của chính bot hoặc tin nhắn không có text
-                    if "message" in messaging and "text" in messaging["message"]:
-                        user_message = messaging["message"]["text"]
-                        
-                        # Gọi Gemini xử lý
-                        ai_reply = ask_gemini(user_message)
-                        
-                        # Gửi lại cho Messenger
-                        send_message(sender_id, ai_reply)
+                    # Gọi Gemini để lấy câu trả lời
+                    ai_reply = ask_gemini(user_text)
+                    
+                    # Gửi câu trả lời lại cho khách
+                    send_fb_message(sender_id, ai_reply)
+    return "OK", 200
 
-        return "OK", 200
-    except Exception as e:
-        print("WEBHOOK ERROR:", e)
-        return "Error", 500
-
-# ===== GEMINI FUNCTION =====
-def ask_gemini(message):
+def ask_gemini(prompt):
     try:
-        # Bạn có thể thêm chỉ dẫn cho Bot ở đây (System Instruction)
-        prompt = f"Bạn là trợ lý bán hàng chuyên nghiệp. Hãy trả lời câu hỏi sau: {message}"
-        response = model.generate_content(prompt)
-        
-        if response and response.text:
-            return response.text
-        return "Bot đang suy nghĩ, bạn chờ chút nhé."
+        # Bạn có thể đổi câu lệnh hệ thống ở đây để bot trả lời theo ý muốn
+        full_prompt = f"Bạn là một trợ lý bán hàng thân thiện. Trả lời ngắn gọn câu hỏi này: {prompt}"
+        response = model.generate_content(full_prompt)
+        return response.text if response.text else "Mình chưa nghĩ ra câu trả lời..."
     except Exception as e:
-        print("GEMINI ERROR:", e)
-        return "Xin lỗi, mình gặp chút trục trặc khi kết nối AI."
+        print(f"Lỗi Gemini: {e}")
+        return "Hệ thống AI đang bận, bạn vui lòng nhắn lại sau nhé!"
 
-# ===== SEND MESSAGE TO USER =====
-def send_message(sender_id, message):
-    try:
-        url = "https://graph.facebook.com/v18.0/me/messages"
-        params = {"access_token": PAGE_ACCESS_TOKEN}
-        payload = {
-            "recipient": {"id": sender_id},
-            "message": {"text": message}
-        }
-        r = requests.post(url, params=params, json=payload)
-        print("SEND STATUS:", r.status_code)
-    except Exception as e:
-        print("SEND ERROR:", e)
+def send_fb_message(sender_id, message_text):
+    url = f"https://graph.facebook.com/v18.0/me/messages?access_token={PAGE_ACCESS_TOKEN}"
+    payload = {
+        "recipient": {"id": sender_id},
+        "message": {"text": message_text}
+    }
+    requests.post(url, json=payload)
 
-# ===== RENDER PORT CONFIG =====
 if __name__ == "__main__":
+    # Fix lỗi Port Binding trên Render
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
